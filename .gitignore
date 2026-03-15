@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Data & checkpoints (too large for git)
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.tar.gz
+weather_synthetic/
+sues200_weather_*/
+
+# Kaggle
+/kaggle/
+
+# Jupyter
+.ipynb_checkpoints/
