@@ -570,7 +570,18 @@ EXP51_RESULTS = {   # scratch + pre-generated weather
     'wind':      {'R@1': 88.12, 'mAP': 92.98},
 }
 # Fill these in after EXP52/53 complete (set to None to skip in comparison)
-EXP52_RESULTS = None  # finetune + online aug (WeatherPrompt-style)
+EXP52_RESULTS = {   # finetune + online aug (WeatherPrompt-style)
+    'normal':    {'R@1': 95.00, 'mAP': 96.71},
+    'fog':       {'R@1': 90.00, 'mAP': 94.30},
+    'rain':      {'R@1': 89.69, 'mAP': 93.05},
+    'snow':      {'R@1': 87.50, 'mAP': 92.05},
+    'dark':      {'R@1': 78.75, 'mAP': 85.07},
+    'light':     {'R@1': 84.69, 'mAP': 90.14},
+    'fog_rain':  {'R@1': 81.88, 'mAP': 88.64},
+    'fog_snow':  {'R@1': 69.38, 'mAP': 79.21},
+    'rain_snow': {'R@1': 84.69, 'mAP': 90.06},
+    'wind':      {'R@1': 88.75, 'mAP': 92.93},
+}
 EXP53_RESULTS = None  # scratch  + online aug (WeatherPrompt-style)
 
 

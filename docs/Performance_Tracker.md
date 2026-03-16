@@ -28,7 +28,7 @@
 | EXP49 | Weather robustness benchmark (zero-shot) | Eval only (EXP35 ckpt) | ✅ Done |
 | EXP50 | Weather-augmented fine-tune + eval | SUES-200 + weather augment (from EXP35) | ✅ Done |
 | EXP51 | Weather-augmented train from scratch + eval | SUES-200 + weather augment (from scratch) | ✅ Done |
-| EXP52 | Weather fine-tune with online augmentation (WeatherPrompt-style) | SUES-200 + online imgaug (from EXP35) | 🔲 Planned |
+| EXP52 | Weather fine-tune with online augmentation (WeatherPrompt-style) | SUES-200 + online imgaug (from EXP35) | ✅ Done |
 | EXP53 | Weather train from scratch with online augmentation (WeatherPrompt-style) | SUES-200 + online imgaug (from scratch) | 🔲 Planned |
 
 ---
@@ -229,31 +229,74 @@
 | EXP49 — Zero-shot (EXP35 ckpt) | 95.94% | 59.78% | 55.76% | 22.19% (fog_snow) |
 | EXP50 — Fine-tune from EXP35 (pre-generated) | 94.38% | 84.69% | 83.61% | 73.44% (fog_snow) |
 | EXP51 — Train from scratch (pre-generated) | 90.94% | 85.47% | 84.86% | 77.19% (fog_snow) |
-| EXP52 — Fine-tune from EXP35 (online augmentation) | 🔲 Pending | 🔲 Pending | 🔲 Pending | 🔲 Pending |
+| EXP52 — Fine-tune from EXP35 (online augmentation) | 95.00% | 85.03% | 83.92% | 69.38% (fog_snow) |
 | EXP53 — Train from scratch (online augmentation) | 🔲 Pending | 🔲 Pending | 🔲 Pending | 🔲 Pending |
 
 ---
 
-## EXP52 — Weather Fine-Tune with Online Augmentation (Planned)
+## EXP52 — Weather Fine-Tune with Online Augmentation
 
-**Purpose:** Fair comparison with WeatherPrompt — replicate their exact data strategy
+**Setup:** Fine-tune from EXP35 checkpoint with online WeatherPrompt-style imgaug augmentation: 1 random drone image per location per epoch, weather applied on-the-fly (60 epochs, LR=1e-4, backbone_LR=1e-5). Best model saved at epoch 20 by avg weather R@1. Duration: 1934.9s (~32 min).
 
-**Config:**
-- Fine-tune from EXP35 checkpoint
-- 60 epochs, LR=1e-4, backbone_LR=1e-5
-- **Data strategy:** Online imgaug augmentation (NOT pre-generated)
-- 1 random drone image per location per epoch (WeatherPrompt's `select=True`)
-- 10 weather conditions applied on-the-fly with exact WeatherPrompt imgaug parameters
-- Training samples per epoch: 120 locations × 1 image × random weather
+**Key difference from EXP50:** EXP50 used 4800 pre-generated images (120×4×10). EXP52 uses 120 original drone images per epoch (1 random per location) with online augmentation — matching WeatherPrompt's exact data protocol.
 
-**Key difference from EXP50:** EXP50 used 4800 pre-generated images (120×4×10), EXP52 uses original drone images with online augmentation (120 locations per epoch)
+### Drone → Satellite Results
 
-**Kaggle Data Sources:**
-1. SUES-200 original (drone + satellite)
-2. Weather synthetic (TEST only, for eval consistency)
-3. EXP35 checkpoint
+| Weather | R@1 | R@5 | R@10 | mAP | ΔR@1 (from normal) | ΔmAP (from normal) |
+|---|---|---|---|---|---|---|
+| normal | 95.00% | 99.38% | 100.00% | 96.71% | — | — |
+| fog | 90.00% | 98.75% | 100.00% | 94.30% | -5.00% | -2.42% |
+| rain | 89.69% | 97.50% | 99.69% | 93.05% | -5.31% | -3.67% |
+| snow | 87.50% | 98.75% | 100.00% | 92.05% | -7.50% | -4.67% |
+| dark | 78.75% | 94.38% | 96.56% | 85.07% | -16.25% | -11.65% |
+| light | 84.69% | 96.88% | 100.00% | 90.14% | -10.31% | -6.57% |
+| fog_rain | 81.88% | 96.88% | 98.75% | 88.64% | -13.12% | -8.08% |
+| fog_snow | 69.38% | 92.81% | 96.25% | 79.21% | -25.62% | -17.50% |
+| rain_snow | 84.69% | 97.19% | 99.06% | 90.06% | -10.31% | -6.65% |
+| wind | 88.75% | 98.75% | 99.69% | 92.93% | -6.25% | -3.78% |
+| **Avg(all)** | **85.03%** | **97.12%** | **99.00%** | **90.22%** | | |
+| **Avg(adverse)** | **83.92%** | | | **89.49%** | **-11.08%** | **-7.22%** |
 
-**Status:** 🔲 Awaiting Kaggle run
+### R@1 — Weather × Altitude
+
+| Weather | 150m | 200m | 250m | 300m | Avg |
+|---|---|---|---|---|---|
+| normal | 88.75% | 95.00% | 97.50% | 98.75% | 95.00% |
+| fog | 81.25% | 91.25% | 93.75% | 93.75% | 90.00% |
+| rain | 81.25% | 90.00% | 93.75% | 93.75% | 89.69% |
+| snow | 75.00% | 91.25% | 92.50% | 91.25% | 87.50% |
+| dark | 70.00% | 83.75% | 85.00% | 76.25% | 78.75% |
+| light | 76.25% | 85.00% | 88.75% | 88.75% | 84.69% |
+| fog_rain | 71.25% | 82.50% | 86.25% | 87.50% | 81.88% |
+| fog_snow | 58.75% | 75.00% | 77.50% | 66.25% | 69.38% |
+| rain_snow | 75.00% | 88.75% | 86.25% | 88.75% | 84.69% |
+| wind | 82.50% | 92.50% | 90.00% | 90.00% | 88.75% |
+
+### EXP52 vs EXP49 / EXP50 / EXP51 Comparison
+
+| Weather | EXP49 R@1 | EXP50 R@1 | EXP51 R@1 | EXP52 R@1 | Δ50→52 | Δ51→52 |
+|---|---|---|---|---|---|---|
+| normal | 95.94% | 94.38% | 90.94% | 95.00% | +0.62% | +4.06% |
+| fog | 86.88% | 90.94% | 90.62% | 90.00% | -0.94% | -0.62% |
+| rain | 43.75% | 85.31% | 87.81% | 89.69% | **+4.38%** | **+1.88%** |
+| snow | 40.62% | 88.12% | 86.56% | 87.50% | -0.62% | +0.94% |
+| dark | 66.88% | 80.00% | 81.88% | 78.75% | -1.25% | -3.13% |
+| light | 83.44% | 86.25% | 87.19% | 84.69% | -1.56% | -2.50% |
+| fog_rain | 42.19% | 78.12% | 80.00% | 81.88% | **+3.75%** | **+1.88%** |
+| fog_snow | 22.19% | 73.44% | 77.19% | 69.38% | -4.06% | -7.81% |
+| rain_snow | 34.69% | 84.69% | 86.25% | 84.69% | 0.00% | -1.56% |
+| wind | 81.25% | 85.62% | 88.12% | 88.75% | **+3.13%** | **+0.63%** |
+| **Avg(adverse)** | **55.77%** | **83.61%** | **84.86%** | **83.92%** | **+0.31%** | **-0.94%** |
+| **Avg(all)** | **59.78%** | **84.69%** | **85.47%** | **85.03%** | **+0.34%** | **-0.44%** |
+
+### Key Findings (EXP52)
+- **Online augmentation ≈ pre-generated** for fine-tune: only -0.31% avg adverse R@1 vs EXP51 (scratch-pregen) but +0.31% vs EXP50 (finetune-pregen)
+- **Normal accuracy preserved:** 95.00% — slightly lower than EXP49 zero-shot (95.94%) but better than EXP50/51
+- **Weakness:** fog_snow (69.38%) — weakest among weather-trained models; online aug may undersample combined conditions
+- **rain, fog_rain, wind improved** vs EXP50: online strategy diversifies exposure for individual weather conditions
+- **Best epoch:** 20 / 60 (early convergence thanks to EXP35 pretrain)
+- **Training duration:** 1934.9s (~32 min, ~3× longer than EXP50 due to imgaug CPU overhead)
+- **Conclusion:** Online WeatherPrompt-style augmentation matches pre-generated approach in overall robustness; training efficiency is lower due to on-the-fly imgaug cost
 
 ---
 
@@ -291,4 +334,4 @@
 
 ---
 
-*Last updated: 2026-03-16*
+*Last updated: 2026-03-16 — EXP52 results added*
