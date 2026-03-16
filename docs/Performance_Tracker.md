@@ -28,6 +28,8 @@
 | EXP49 | Weather robustness benchmark (zero-shot) | Eval only (EXP35 ckpt) | ✅ Done |
 | EXP50 | Weather-augmented fine-tune + eval | SUES-200 + weather augment (from EXP35) | ✅ Done |
 | EXP51 | Weather-augmented train from scratch + eval | SUES-200 + weather augment (from scratch) | ✅ Done |
+| EXP52 | Weather fine-tune with online augmentation (WeatherPrompt-style) | SUES-200 + online imgaug (from EXP35) | 🔲 Planned |
+| EXP53 | Weather train from scratch with online augmentation (WeatherPrompt-style) | SUES-200 + online imgaug (from scratch) | 🔲 Planned |
 
 ---
 
@@ -225,8 +227,67 @@
 | Method | Normal R@1 | Avg(all) R@1 | Avg(adverse) R@1 | Worst R@1 |
 |---|---|---|---|---|
 | EXP49 — Zero-shot (EXP35 ckpt) | 95.94% | 59.78% | 55.76% | 22.19% (fog_snow) |
-| EXP50 — Fine-tune from EXP35 | 94.38% | 84.69% | 83.61% | 73.44% (fog_snow) |
-| EXP51 — Train from scratch | 90.94% | 85.47% | 84.86% | 77.19% (fog_snow) |
+| EXP50 — Fine-tune from EXP35 (pre-generated) | 94.38% | 84.69% | 83.61% | 73.44% (fog_snow) |
+| EXP51 — Train from scratch (pre-generated) | 90.94% | 85.47% | 84.86% | 77.19% (fog_snow) |
+| EXP52 — Fine-tune from EXP35 (online augmentation) | 🔲 Pending | 🔲 Pending | 🔲 Pending | 🔲 Pending |
+| EXP53 — Train from scratch (online augmentation) | 🔲 Pending | 🔲 Pending | 🔲 Pending | 🔲 Pending |
+
+---
+
+## EXP52 — Weather Fine-Tune with Online Augmentation (Planned)
+
+**Purpose:** Fair comparison with WeatherPrompt — replicate their exact data strategy
+
+**Config:**
+- Fine-tune from EXP35 checkpoint
+- 60 epochs, LR=1e-4, backbone_LR=1e-5
+- **Data strategy:** Online imgaug augmentation (NOT pre-generated)
+- 1 random drone image per location per epoch (WeatherPrompt's `select=True`)
+- 10 weather conditions applied on-the-fly with exact WeatherPrompt imgaug parameters
+- Training samples per epoch: 120 locations × 1 image × random weather
+
+**Key difference from EXP50:** EXP50 used 4800 pre-generated images (120×4×10), EXP52 uses original drone images with online augmentation (120 locations per epoch)
+
+**Kaggle Data Sources:**
+1. SUES-200 original (drone + satellite)
+2. Weather synthetic (TEST only, for eval consistency)
+3. EXP35 checkpoint
+
+**Status:** 🔲 Awaiting Kaggle run
+
+---
+
+## EXP53 — Weather Train from Scratch with Online Augmentation (Planned)
+
+**Purpose:** Fair comparison with WeatherPrompt — from scratch variant
+
+**Config:**
+- From scratch (no checkpoint)
+- 120 epochs, LR=3e-4, backbone_LR=3e-5, RECON_WARMUP=10
+- **Data strategy:** Online imgaug augmentation (NOT pre-generated)
+- 1 random drone image per location per epoch (WeatherPrompt's `select=True`)
+- 10 weather conditions applied on-the-fly with exact WeatherPrompt imgaug parameters
+- Training samples per epoch: 120 locations × 1 image × random weather
+
+**Key difference from EXP51:** EXP51 used 4800 pre-generated images (120×4×10), EXP53 uses original drone images with online augmentation (120 locations per epoch)
+
+**Kaggle Data Sources:**
+1. SUES-200 original (drone + satellite)
+2. Weather synthetic (TEST only, for eval consistency)
+
+**Status:** 🔲 Awaiting Kaggle run
+
+---
+
+## Data Strategy Comparison
+
+| Experiment | Data Source | Samples/Epoch | Augmentation | Images/Loc/Epoch |
+|---|---|---|---|---|
+| EXP50 | Pre-generated weather | 4800 (120×4×10) | Offline (EXP48) | 40 (4 alt × 10 weather) |
+| EXP51 | Pre-generated weather | 4800 (120×4×10) | Offline (EXP48) | 40 (4 alt × 10 weather) |
+| EXP52 | Original SUES-200 | 120 (1 per loc) | Online imgaug | 1 (random alt, random weather) |
+| EXP53 | Original SUES-200 | 120 (1 per loc) | Online imgaug | 1 (random alt, random weather) |
+| WeatherPrompt | Original dataset | #classes (1 per class) | Online imgaug | 1 (random, random weather) |
 
 ---
 
