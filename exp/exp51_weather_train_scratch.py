@@ -756,6 +756,151 @@ def evaluate_retrieval(model, query_ds, sat_feats, sat_labels, device):
 
 
 # =============================================================================
+# SATELLITE→DRONE EVALUATION (S2D)
+# =============================================================================
+def build_drone_gallery_s2d(model, weather_root, sues_root, weather_name, device, transform):
+    """
+    Builds drone gallery for Satellite→Drone (S2D) retrieval.
+    Gallery = weather-augmented test drones (labeled 0..79) +
+              clean train drones as distractors (labeled -1000...).
+    """
+    test_locs  = [f"{l:04d}" for l in CFG.TEST_LOCS]
+    loc_to_idx = {l: i for i, l in enumerate(test_locs)}
+    train_locs = [f"{l:04d}" for l in CFG.TRAIN_LOCS]
+
+    drone_imgs, drone_lbls, drone_alt_idxs = [], [], []
+    distractor_cnt = 0
+
+    # 1. Weather-augmented TEST drone images (labeled)
+    weather_test_dir = os.path.join(weather_root, "sues200_weather_test")
+    if os.path.isdir(weather_test_dir):
+        for class_dir_name in sorted(os.listdir(weather_test_dir)):
+            class_path = os.path.join(weather_test_dir, class_dir_name)
+            if not os.path.isdir(class_path):
+                continue
+            parts_split = class_dir_name.split("_")
+            if len(parts_split) != 2:
+                continue
+            loc_id, alt = parts_split[0], parts_split[1]
+            if loc_id not in loc_to_idx:
+                continue
+            label_idx = loc_to_idx[loc_id]
+            for fname in sorted(os.listdir(class_path)):
+                if not fname.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    continue
+                stem = os.path.splitext(fname)[0]
+                if '-' not in stem:
+                    continue
+                w = stem.rsplit('-', 1)[-1]
+                if w != weather_name:
+                    continue
+                try:
+                    img = transform(Image.open(os.path.join(class_path, fname)).convert('RGB'))
+                    drone_imgs.append(img)
+                    drone_lbls.append(label_idx)
+                    drone_alt_idxs.append(CFG.ALT_TO_IDX.get(alt, 0))
+                except Exception:
+                    pass
+
+    # 2. Clean TRAIN drone images (distractors)
+    drone_dir = os.path.join(sues_root, CFG.DRONE_DIR)
+    for loc in train_locs:
+        for alt in CFG.ALTITUDES:
+            alt_dir = os.path.join(drone_dir, loc, alt)
+            if not os.path.isdir(alt_dir):
+                continue
+            imgs_in_dir = sorted(f for f in os.listdir(alt_dir)
+                                 if f.lower().endswith(('.jpg', '.jpeg', '.png')))
+            if not imgs_in_dir:
+                continue
+            try:
+                img = transform(Image.open(os.path.join(alt_dir, imgs_in_dir[0])).convert('RGB'))
+                drone_imgs.append(img)
+                drone_lbls.append(-1000 - distractor_cnt)
+                drone_alt_idxs.append(CFG.ALT_TO_IDX.get(alt, 0))
+                distractor_cnt += 1
+            except Exception:
+                pass
+
+    # Embed all drone images
+    drone_feats = []
+    model.eval()
+    with torch.no_grad():
+        for i in range(0, len(drone_imgs), CFG.BATCH_SIZE):
+            bimgs = torch.stack(drone_imgs[i:i + CFG.BATCH_SIZE]).to(device)
+            balts = torch.tensor(drone_alt_idxs[i:i + CFG.BATCH_SIZE], device=device)
+            with torch.amp.autocast('cuda', enabled=CFG.USE_AMP):
+                feats = model.extract_embedding(bimgs, alt_idx=balts)
+            drone_feats.append(feats.cpu())
+
+    drone_feats = torch.cat(drone_feats)
+    drone_lbls  = torch.tensor(drone_lbls)
+    test_cnt    = len(drone_feats) - distractor_cnt
+    print(f"  Drone gallery S2D ({weather_name}): {len(drone_feats)} "
+          f"(test={test_cnt}, distractors={distractor_cnt})")
+    return drone_feats, drone_lbls
+
+
+@torch.no_grad()
+def evaluate_s2d(sat_feats, sat_labels, drone_feats, drone_labels):
+    """
+    Satellite→Drone retrieval.
+    Queries  = test satellite images (sat_labels >= 0, 80 queries).
+    Gallery  = weather-augmented test drones + clean distractor train drones.
+    Each query has up to 4 matches (one per altitude of same location).
+    """
+    q_mask   = sat_labels >= 0
+    q_feats  = sat_feats[q_mask]
+    q_labels = sat_labels[q_mask]
+    sim = q_feats @ drone_feats.T
+    _, rank = sim.sort(1, descending=True)
+    N = q_feats.size(0)
+    r1 = r5 = r10 = ap = 0
+    for i in range(N):
+        matches = torch.where(drone_labels[rank[i]] == q_labels[i])[0]
+        if len(matches) == 0:
+            continue
+        first = matches[0].item()
+        if first < 1:  r1 += 1
+        if first < 5:  r5 += 1
+        if first < 10: r10 += 1
+        ap += sum((j + 1) / (p.item() + 1) for j, p in enumerate(matches)) / len(matches)
+    return {
+        'R@1': r1 / N * 100, 'R@5': r5 / N * 100,
+        'R@10': r10 / N * 100, 'mAP': ap / N * 100,
+        'num_queries': N,
+    }
+
+
+def print_s2d_weather_table(all_s2d_results, normal_s2d):
+    """Print Satellite→Drone per-weather results table."""
+    print(f"\n{'='*85}")
+    print(f"  WEATHER ROBUSTNESS — Satellite→Drone Retrieval (SUES-200 Test)")
+    print(f"{'='*85}")
+    print(f"  {'Weather':>12s}  {'R@1':>7s}  {'R@5':>7s}  {'R@10':>7s}  {'mAP':>7s}  {'\u0394R@1':>7s}  {'\u0394mAP':>7s}  {'#Q':>5s}")
+    print(f"  {'-'*78}")
+    nr1 = normal_s2d['R@1']; nmap = normal_s2d['mAP']
+    for w_name in CFG.WEATHER_NAMES:
+        r = all_s2d_results[w_name]
+        dr1 = r['R@1'] - nr1; dmap = r['mAP'] - nmap
+        print(f"  {w_name:>12s}  {r['R@1']:6.2f}%  {r['R@5']:6.2f}%  {r['R@10']:6.2f}%  "
+              f"{r['mAP']:6.2f}%  {dr1:+6.2f}%  {dmap:+6.2f}%  "
+              f"{r['num_queries']:>5d}")
+    print(f"  {'-'*78}")
+    adv = [w for w in CFG.WEATHER_NAMES if w != 'normal']
+    avg_r1  = np.mean([all_s2d_results[w]['R@1']  for w in CFG.WEATHER_NAMES])
+    avg_r5  = np.mean([all_s2d_results[w]['R@5']  for w in CFG.WEATHER_NAMES])
+    avg_r10 = np.mean([all_s2d_results[w]['R@10'] for w in CFG.WEATHER_NAMES])
+    avg_map = np.mean([all_s2d_results[w]['mAP']  for w in CFG.WEATHER_NAMES])
+    avg_adv_r1  = np.mean([all_s2d_results[w]['R@1']  for w in adv])
+    avg_adv_map = np.mean([all_s2d_results[w]['mAP']  for w in adv])
+    print(f"  {'Avg(all)':>12s}  {avg_r1:6.2f}%  {avg_r5:6.2f}%  {avg_r10:6.2f}%  {avg_map:6.2f}%")
+    print(f"  {'Avg(adverse)':>12s}  {avg_adv_r1:6.2f}%  {'':>7s}  {'':>7s}  {avg_adv_map:6.2f}%  "
+          f"{avg_adv_r1-nr1:+5.2f}%  {avg_adv_map-nmap:+5.2f}%")
+    print(f"{'='*85}")
+
+
+# =============================================================================
 # TRAINING
 # =============================================================================
 def train_one_epoch(model, teacher, ema, loader, losses, new_losses, optimizer,
@@ -1264,6 +1409,23 @@ def main():
     print_cross_table(all_results)
     print_comparison(all_results)
 
+    # ---- S2D Evaluation (Satellite→Drone) ----
+    print(f"\n{'='*75}")
+    print(f"  [S2D] Satellite→Drone Evaluation …")
+    all_s2d_results = OrderedDict()
+    for w_name in CFG.WEATHER_NAMES:
+        drone_feats_s2d, drone_lbls_s2d = build_drone_gallery_s2d(
+            model, CFG.WEATHER_ROOT, CFG.SUES_ROOT, w_name, DEVICE, test_tf)
+        s2d_res = evaluate_s2d(sat_feats, sat_labels, drone_feats_s2d, drone_lbls_s2d)
+        all_s2d_results[w_name] = s2d_res
+        print(f"    {w_name:>12s}  R@1={s2d_res['R@1']:.2f}%  R@5={s2d_res['R@5']:.2f}%  "
+              f"R@10={s2d_res['R@10']:.2f}%  mAP={s2d_res['mAP']:.2f}%")
+        del drone_feats_s2d, drone_lbls_s2d
+        gc.collect()
+        if torch.cuda.is_available(): torch.cuda.empty_cache()
+    normal_s2d = all_s2d_results['normal']
+    print_s2d_weather_table(all_s2d_results, normal_s2d)
+
     # LaTeX
     latex = generate_latex_table(all_results, normal_results)
     print(f"\n{'='*75}")
@@ -1278,7 +1440,7 @@ def main():
         'experiment': 'EXP51_Weather_Train_From_Scratch',
         'model': 'SPDGeo-DPEA-MAR (weather-trained from scratch)',
         'dataset': 'SUES-200',
-        'direction': 'drone → satellite',
+        'direction': 'drone → satellite (D2S) + satellite → drone (S2D)',
         'pretrained_from': 'None (from scratch)',
         'timestamp': {
             'start': train_start.isoformat(),
@@ -1323,6 +1485,15 @@ def main():
             'loss_history': loss_history,
         },
         'latex_table': latex,
+        's2d_weather_results': {w: all_s2d_results[w] for w in CFG.WEATHER_NAMES},
+        's2d_summary_metrics': {
+            'normal_R@1': normal_s2d['R@1'],
+            'normal_mAP': normal_s2d['mAP'],
+            'avg_all_R@1':     float(np.mean([all_s2d_results[w]['R@1'] for w in CFG.WEATHER_NAMES])),
+            'avg_all_mAP':     float(np.mean([all_s2d_results[w]['mAP'] for w in CFG.WEATHER_NAMES])),
+            'avg_adverse_R@1': float(np.mean([all_s2d_results[w]['R@1'] for w in adv_weathers])),
+            'avg_adverse_mAP': float(np.mean([all_s2d_results[w]['mAP'] for w in adv_weathers])),
+        },
     }
 
     json_path = os.path.join(CFG.OUTPUT_DIR, 'exp51_weather_scratch.json')
@@ -1339,6 +1510,11 @@ def main():
     print(f"  Avg (all weather):  R@1={sm['avg_all_R@1']:.2f}%  mAP={sm['avg_all_mAP']:.2f}%")
     print(f"  Avg (adverse):      R@1={sm['avg_adverse_R@1']:.2f}%  mAP={sm['avg_adverse_mAP']:.2f}%")
     print(f"  Training duration:  {(train_end - train_start).total_seconds():.1f}s")
+    s2d_sm = summary['s2d_summary_metrics']
+    print(f"\n  S2D — Satellite→Drone:")
+    print(f"  Normal:             R@1={normal_s2d['R@1']:.2f}%  mAP={normal_s2d['mAP']:.2f}%")
+    print(f"  Avg (all weather):  R@1={s2d_sm['avg_all_R@1']:.2f}%  mAP={s2d_sm['avg_all_mAP']:.2f}%")
+    print(f"  Avg (adverse):      R@1={s2d_sm['avg_adverse_R@1']:.2f}%  mAP={s2d_sm['avg_adverse_mAP']:.2f}%")
     print(f"\n  vs EXP49 (zero-shot):")
     e49_adv = np.mean([EXP49_RESULTS[w]['R@1'] for w in adv_weathers])
     print(f"    Avg adverse R@1:  {e49_adv:.2f}% → {sm['avg_adverse_R@1']:.2f}% "
