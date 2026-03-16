@@ -40,7 +40,7 @@ from torchvision import transforms
 from PIL import Image
 from tqdm import tqdm
 
-# Monkey-patch np.sctypes for imgaug compatibility with NumPy 2.0
+# Monkey-patch for imgaug compatibility with NumPy 2.0
 if not hasattr(np, 'sctypes'):
     np.sctypes = {
         'int': [np.int8, np.int16, np.int32, np.int64],
@@ -49,6 +49,14 @@ if not hasattr(np, 'sctypes'):
         'complex': [np.complex64, np.complex128],
         'others': [bool, object, bytes, str, np.void],
     }
+if not hasattr(np, 'complex'):
+    np.complex = complex
+if not hasattr(np, 'float'):
+    np.float = float
+if not hasattr(np, 'int'):
+    np.int = int
+if not hasattr(np, 'bool'):
+    np.bool = bool
 
 import imgaug.augmenters as iaa
 
