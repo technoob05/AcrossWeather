@@ -449,6 +449,7 @@ def measure_model_complexity(model, device):
         gflops = macs / 1e9
     except Exception:
         pass
+    model.eval()
     with torch.no_grad():
         for _ in range(10): model.extract_embedding(dummy)
         if device.type == 'cuda': torch.cuda.synchronize()
