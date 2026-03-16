@@ -583,7 +583,18 @@ EXP52_RESULTS = {   # finetune + online aug (WeatherPrompt-style)
     'rain_snow': {'R@1': 84.69, 'mAP': 90.06},
     'wind':      {'R@1': 88.75, 'mAP': 92.93},
 }
-EXP53_RESULTS = None  # scratch  + online aug (WeatherPrompt-style)
+EXP53_RESULTS = {   # scratch  + online aug (WeatherPrompt-style)
+    'normal':    {'R@1': 92.81, 'mAP': 95.81},
+    'fog':       {'R@1': 91.88, 'mAP': 94.94},
+    'rain':      {'R@1': 90.31, 'mAP': 94.18},
+    'snow':      {'R@1': 87.19, 'mAP': 92.19},
+    'dark':      {'R@1': 82.50, 'mAP': 87.90},
+    'light':     {'R@1': 86.25, 'mAP': 91.25},
+    'fog_rain':  {'R@1': 85.62, 'mAP': 91.19},
+    'fog_snow':  {'R@1': 79.38, 'mAP': 86.89},
+    'rain_snow': {'R@1': 84.69, 'mAP': 90.76},
+    'wind':      {'R@1': 87.50, 'mAP': 92.33},
+}
 
 
 def print_comparison(all_results):

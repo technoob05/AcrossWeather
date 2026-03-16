@@ -29,7 +29,7 @@
 | EXP50 | Weather-augmented fine-tune + eval | SUES-200 + weather augment (from EXP35) | ✅ Done |
 | EXP51 | Weather-augmented train from scratch + eval | SUES-200 + weather augment (from scratch) | ✅ Done |
 | EXP52 | Weather fine-tune with online augmentation (WeatherPrompt-style) | SUES-200 + online imgaug (from EXP35) | ✅ Done |
-| EXP53 | Weather train from scratch with online augmentation (WeatherPrompt-style) | SUES-200 + online imgaug (from scratch) | 🔲 Planned |
+| EXP53 | Weather train from scratch with online augmentation (WeatherPrompt-style) | SUES-200 + online imgaug (from scratch) | ✅ Done |
 | EXP54 | Zero-shot eval framework (any checkpoint → all 10 weathers) | Eval only (EXP35 ckpt run complete) | ✅ Done (EXP35) |
 
 ---
@@ -231,7 +231,7 @@
 | EXP50 — Fine-tune from EXP35 (pre-generated) | 94.38% | 84.69% | 83.61% | 73.44% (fog_snow) |
 | EXP51 — Train from scratch (pre-generated) | 90.94% | 85.47% | 84.86% | 77.19% (fog_snow) |
 | EXP52 — Fine-tune from EXP35 (online augmentation) | 95.00% | 85.03% | 83.92% | 69.38% (fog_snow) |
-| EXP53 — Train from scratch (online augmentation) | 🔲 Pending | 🔲 Pending | 🔲 Pending | 🔲 Pending |
+| EXP53 — Train from scratch (online augmentation) | 92.81% | 86.81% | 86.15% | 79.38% (fog_snow) |
 | EXP54 — Zero-shot eval (EXP35 ckpt, new eval script) | 95.94% | 59.78% | 55.76% | 22.19% (fog_snow) |
 
 ---
@@ -302,25 +302,69 @@
 
 ---
 
-## EXP53 — Weather Train from Scratch with Online Augmentation (Planned)
+## EXP53 — Weather Train from Scratch with Online Augmentation
 
-**Purpose:** Fair comparison with WeatherPrompt — from scratch variant
+**Setup:** Train from scratch (random init + pretrained DINOv2 backbone) with online WeatherPrompt-style imgaug augmentation: 1 random drone image per location per epoch, weather applied on-the-fly (120 epochs, LR=3e-4, backbone_LR=3e-5, RECON_WARMUP=10). Best model saved at epoch 30 by avg weather R@1 on 4-weather eval subset. Duration: 3654.1s (~61 min).
 
-**Config:**
-- From scratch (no checkpoint)
-- 120 epochs, LR=3e-4, backbone_LR=3e-5, RECON_WARMUP=10
-- **Data strategy:** Online imgaug augmentation (NOT pre-generated)
-- 1 random drone image per location per epoch (WeatherPrompt's `select=True`)
-- 10 weather conditions applied on-the-fly with exact WeatherPrompt imgaug parameters
-- Training samples per epoch: 120 locations × 1 image × random weather
+**Key difference from EXP51:** EXP51 used 4800 pre-generated images (120×4×10). EXP53 uses 120 original drone images per epoch (1 random per location) with online augmentation — matching WeatherPrompt's exact data protocol. Same strategy as EXP52 but from scratch instead of fine-tuning from EXP35.
 
-**Key difference from EXP51:** EXP51 used 4800 pre-generated images (120×4×10), EXP53 uses original drone images with online augmentation (120 locations per epoch)
+### Drone → Satellite Results
 
-**Kaggle Data Sources:**
-1. SUES-200 original (drone + satellite)
-2. Weather synthetic (TEST only, for eval consistency)
+| Weather | R@1 | R@5 | R@10 | mAP | ΔR@1 (from normal) | ΔmAP (from normal) |
+|---|---|---|---|---|---|---|
+| normal | 92.81% | 98.44% | 100.00% | 95.81% | — | — |
+| fog | 91.88% | 98.75% | 100.00% | 94.94% | -0.94% | -0.86% |
+| rain | 90.31% | 99.69% | 100.00% | 94.18% | -2.50% | -1.62% |
+| snow | 87.19% | 98.75% | 99.69% | 92.19% | -5.62% | -3.61% |
+| dark | 82.50% | 94.06% | 95.62% | 87.90% | -10.31% | -7.91% |
+| light | 86.25% | 96.56% | 98.75% | 91.25% | -6.56% | -4.56% |
+| fog_rain | 85.62% | 98.12% | 99.38% | 91.19% | -7.19% | -4.61% |
+| fog_snow | 79.38% | 95.94% | 98.44% | 86.89% | -13.44% | -8.92% |
+| rain_snow | 84.69% | 98.12% | 99.69% | 90.76% | -8.12% | -5.04% |
+| wind | 87.50% | 98.12% | 100.00% | 92.33% | -5.31% | -3.48% |
+| **Avg(all)** | **86.81%** | **97.66%** | **99.16%** | **91.74%** | | |
+| **Avg(adverse)** | **86.15%** | | | **91.29%** | **-6.67%** | **-4.51%** |
 
-**Status:** 🔲 Awaiting Kaggle run
+### R@1 — Weather × Altitude
+
+| Weather | 150m | 200m | 250m | 300m | Avg |
+|---|---|---|---|---|---|
+| normal | 86.25% | 93.75% | 96.25% | 95.00% | 92.81% |
+| fog | 85.00% | 95.00% | 93.75% | 93.75% | 91.88% |
+| rain | 87.50% | 87.50% | 95.00% | 91.25% | 90.31% |
+| snow | 81.25% | 86.25% | 91.25% | 90.00% | 87.19% |
+| dark | 76.25% | 82.50% | 88.75% | 82.50% | 82.50% |
+| light | 81.25% | 88.75% | 86.25% | 88.75% | 86.25% |
+| fog_rain | 76.25% | 88.75% | 87.50% | 90.00% | 85.62% |
+| fog_snow | 75.00% | 82.50% | 80.00% | 80.00% | 79.38% |
+| rain_snow | 71.25% | 86.25% | 91.25% | 90.00% | 84.69% |
+| wind | 80.00% | 88.75% | 90.00% | 91.25% | 87.50% |
+
+### EXP53 vs EXP49 / EXP50 / EXP51 / EXP52 Comparison
+
+| Weather | EXP49 R@1 | EXP50 R@1 | EXP51 R@1 | EXP52 R@1 | EXP53 R@1 | Δ50→53 | Δ51→53 | Δ52→53 |
+|---|---|---|---|---|---|---|---|---|
+| normal | 95.94% | 94.38% | 90.94% | 95.00% | 92.81% | -1.57% | +1.87% | -2.19% |
+| fog | 86.88% | 90.94% | 89.69% | 90.00% | 91.88% | **+0.94%** | **+2.19%** | **+1.88%** |
+| rain | 43.75% | 85.31% | 86.56% | 89.69% | 90.31% | **+5.00%** | **+3.75%** | +0.62% |
+| snow | 40.62% | 88.12% | 89.69% | 87.50% | 87.19% | -0.93% | -2.50% | -0.31% |
+| dark | 66.88% | 80.00% | 80.31% | 78.75% | 82.50% | **+2.50%** | **+2.19%** | **+3.75%** |
+| light | 83.44% | 86.25% | 86.88% | 84.69% | 86.25% | 0.00% | -0.63% | **+1.56%** |
+| fog_rain | 42.19% | 78.12% | 81.25% | 81.88% | 85.62% | **+7.50%** | **+4.38%** | **+3.75%** |
+| fog_snow | 22.19% | 73.44% | 75.00% | 69.38% | 79.38% | **+5.94%** | **+4.38%** | **+10.00%** |
+| rain_snow | 34.69% | 84.69% | 86.25% | 84.69% | 84.69% | 0.00% | -1.56% | 0.00% |
+| wind | 81.25% | 85.62% | 88.12% | 88.75% | 87.50% | **+1.88%** | -0.62% | -1.25% |
+| **Avg(adverse)** | **55.77%** | **83.61%** | **84.86%** | **83.92%** | **86.15%** | **+2.54%** | **+1.28%** | **+2.23%** |
+| **Avg(all)** | **59.78%** | **84.69%** | **85.47%** | **85.03%** | **86.81%** | **+2.13%** | **+1.34%** | **+1.79%** |
+
+### Key Findings (EXP53)
+- **Best overall model so far:** avg adverse R@1 = 86.15% — beats EXP50 (+2.54%), EXP51 (+1.28%), EXP52 (+2.23%)
+- **Biggest wins vs EXP52 (ft-online):** fog_snow **+10.00%**, fog_rain +3.75%, dark +3.75% — scratch training with online aug generalizes better on combined conditions
+- **fog_snow (79.38%)** — strongest combined-weather result of all experiments
+- **Normal R@1 trade-off:** 92.81% — lower than EXP52 (95.00%) and zero-shot (95.94%), higher than EXP51 (90.94%)
+- **Best epoch:** 30 / 120 (avg weather R@1 = 87.42% on eval subset — converged in first quarter of training)
+- **Training duration:** 3654.1s (~61 min, ~4.5× longer than EXP51 due to imgaug CPU overhead)
+- **Conclusion:** Scratch + online aug is the best strategy overall. Online augmentation benefits scratch training more than fine-tuning (EXP52 comparison). The diversity of on-the-fly weather exposure pushes combined-weather generalisation higher than any pre-generated approach.
 
 ---
 
@@ -385,4 +429,4 @@
 
 ---
 
-*Last updated: 2026-03-16 — EXP54 results added (EXP35 checkpoint zero-shot eval, confirms EXP49)*
+*Last updated: 2026-03-16 — EXP53 results added (scratch+online aug; avg adverse R@1=86.15%, new best across all experiments)*
