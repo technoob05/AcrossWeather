@@ -27,7 +27,7 @@
 | EXP48 | Weather synthetic data generation | imgaug 10 conditions | ✅ Done |
 | EXP49 | Weather robustness benchmark (zero-shot) | Eval only (EXP35 ckpt) | ✅ Done |
 | EXP50 | Weather-augmented fine-tune + eval | SUES-200 + weather augment (from EXP35) | ✅ Done |
-| EXP51 | Weather-augmented train from scratch + eval | SUES-200 + weather augment (from scratch) | 🔄 Planned |
+| EXP51 | Weather-augmented train from scratch + eval | SUES-200 + weather augment (from scratch) | ✅ Done |
 
 ---
 
@@ -159,9 +159,64 @@
 
 **Setup:** Train from scratch (random init + pretrained DINOv2 backbone) on weather-augmented SUES-200 train data, then evaluate on all 10 weather conditions. Same architecture and loss pipeline, but no EXP35 checkpoint — full 120 epochs.
 
-### Results
+**Training:** 4800 samples (120 locs × 4 alts × 10 weathers), P=16, K=4, LR=3e-4, backbone_LR=3e-5, 12 loss components, cosine LR with 5-epoch warmup, RECON_WARMUP=10. Best model saved at epoch 50 by avg weather R@1. Duration: 1377.0s.
 
-> _Pending — run on Kaggle_
+### Drone → Satellite Results
+
+| Weather | R@1 | R@5 | R@10 | mAP | ΔR@1 (from normal) | ΔmAP (from normal) |
+|---|---|---|---|---|---|---|
+| normal | 90.94% | 99.38% | 100.00% | 94.51% | — | — |
+| fog | 90.62% | 98.75% | 100.00% | 94.40% | -0.31% | -0.11% |
+| rain | 87.81% | 97.81% | 99.69% | 92.81% | -3.12% | -1.71% |
+| snow | 86.56% | 99.06% | 100.00% | 92.08% | -4.38% | -2.43% |
+| dark | 81.88% | 95.31% | 97.50% | 87.67% | -9.06% | -6.84% |
+| light | 87.19% | 97.81% | 99.69% | 92.05% | -3.75% | -2.46% |
+| fog_rain | 80.00% | 97.19% | 98.75% | 87.82% | -10.94% | -6.70% |
+| fog_snow | 77.19% | 94.38% | 98.44% | 84.75% | -13.75% | -9.76% |
+| rain_snow | 86.25% | 96.88% | 100.00% | 91.40% | -4.69% | -3.12% |
+| wind | 86.25% | 98.44% | 99.69% | 91.36% | -4.69% | -3.16% |
+| **Avg(all)** | **85.47%** | **97.50%** | **99.38%** | **90.88%** | | |
+| **Avg(adverse)** | **84.86%** | | | **90.48%** | **-6.08%** | **-4.03%** |
+
+### R@1 — Weather × Altitude
+
+| Weather | 150m | 200m | 250m | 300m | Avg |
+|---|---|---|---|---|---|
+| normal | 85.00% | 92.50% | 92.50% | 93.75% | 90.94% |
+| fog | 78.75% | 92.50% | 96.25% | 95.00% | 90.62% |
+| rain | 76.25% | 88.75% | 92.50% | 93.75% | 87.81% |
+| snow | 78.75% | 86.25% | 92.50% | 88.75% | 86.56% |
+| dark | 72.50% | 77.50% | 93.75% | 83.75% | 81.88% |
+| light | 80.00% | 86.25% | 91.25% | 91.25% | 87.19% |
+| fog_rain | 68.75% | 80.00% | 87.50% | 83.75% | 80.00% |
+| fog_snow | 68.75% | 77.50% | 88.75% | 73.75% | 77.19% |
+| rain_snow | 76.25% | 90.00% | 93.75% | 85.00% | 86.25% |
+| wind | 81.25% | 83.75% | 88.75% | 91.25% | 86.25% |
+
+### EXP51 vs EXP49 vs EXP50 Comparison
+
+| Weather | EXP49 R@1 | EXP50 R@1 | EXP51 R@1 | Δ49→51 | Δ50→51 |
+|---|---|---|---|---|---|
+| normal | 95.94% | 94.38% | 90.94% | -5.00% | -3.44% |
+| fog | 86.88% | 90.94% | 90.62% | **+3.75%** | -0.31% |
+| rain | 43.75% | 85.31% | 87.81% | **+44.06%** | **+2.50%** |
+| snow | 40.62% | 88.12% | 86.56% | **+45.94%** | -1.56% |
+| dark | 66.88% | 80.00% | 81.88% | **+15.00%** | **+1.88%** |
+| light | 83.44% | 86.25% | 87.19% | **+3.75%** | **+0.94%** |
+| fog_rain | 42.19% | 78.12% | 80.00% | **+37.81%** | **+1.88%** |
+| fog_snow | 22.19% | 73.44% | 77.19% | **+55.00%** | **+3.75%** |
+| rain_snow | 34.69% | 84.69% | 86.25% | **+51.56%** | **+1.56%** |
+| wind | 81.25% | 85.62% | 86.25% | **+5.00%** | **+0.63%** |
+| **Avg(adverse)** | **55.77%** | **83.61%** | **84.86%** | **+29.10%** | **+1.25%** |
+| **Avg(all)** | **59.78%** | **84.69%** | **85.47%** | **+25.69%** | **+0.78%** |
+
+### Key Findings (EXP51)
+- **Marginally beats EXP50** on adverse weather: +1.25% avg R@1 despite no pretrained task-specific weights
+- **Lower normal R@1** than EXP49/EXP50: 90.94% vs 95.94%/94.38% — full training on weather data slightly hurts clean performance
+- **Best improvement vs EXP50:** fog_snow +3.75%, rain +2.50%, fog_rain +1.88%
+- **Best epoch:** 50 of 120 (avg weather R@1 = 85.62% on eval subset)
+- **Training duration:** 1377.0s (~23 min)
+- **Conclusion:** Training from scratch with weather data matches fine-tuning; pretrained task knowledge (EXP35) not strictly necessary for weather robustness
 
 ---
 
@@ -171,8 +226,8 @@
 |---|---|---|---|---|
 | EXP49 — Zero-shot (EXP35 ckpt) | 95.94% | 59.78% | 55.76% | 22.19% (fog_snow) |
 | EXP50 — Fine-tune from EXP35 | 94.38% | 84.69% | 83.61% | 73.44% (fog_snow) |
-| EXP51 — Train from scratch | _pending_ | _pending_ | _pending_ | _pending_ |
+| EXP51 — Train from scratch | 90.94% | 85.47% | 84.86% | 77.19% (fog_snow) |
 
 ---
 
-*Last updated: 2026-03-15*
+*Last updated: 2026-03-16*
