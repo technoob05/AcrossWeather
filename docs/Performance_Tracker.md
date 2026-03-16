@@ -30,6 +30,7 @@
 | EXP51 | Weather-augmented train from scratch + eval | SUES-200 + weather augment (from scratch) | ✅ Done |
 | EXP52 | Weather fine-tune with online augmentation (WeatherPrompt-style) | SUES-200 + online imgaug (from EXP35) | ✅ Done |
 | EXP53 | Weather train from scratch with online augmentation (WeatherPrompt-style) | SUES-200 + online imgaug (from scratch) | 🔲 Planned |
+| EXP54 | Zero-shot eval framework (any checkpoint → all 10 weathers) | Eval only (EXP35 ckpt run complete) | ✅ Done (EXP35) |
 
 ---
 
@@ -231,6 +232,7 @@
 | EXP51 — Train from scratch (pre-generated) | 90.94% | 85.47% | 84.86% | 77.19% (fog_snow) |
 | EXP52 — Fine-tune from EXP35 (online augmentation) | 95.00% | 85.03% | 83.92% | 69.38% (fog_snow) |
 | EXP53 — Train from scratch (online augmentation) | 🔲 Pending | 🔲 Pending | 🔲 Pending | 🔲 Pending |
+| EXP54 — Zero-shot eval (EXP35 ckpt, new eval script) | 95.94% | 59.78% | 55.76% | 22.19% (fog_snow) |
 
 ---
 
@@ -322,6 +324,55 @@
 
 ---
 
+## EXP54 — Zero-Shot Eval Framework (EXP35 Checkpoint)
+
+**Setup:** Pure inference, no training. Reusable eval script that loads any SPDGeo-DPEA-MAR checkpoint and evaluates all 10 weather conditions. First run uses EXP35 checkpoint (epoch=65, pretrained R@1=96.32%). Duration: 39.7s.
+
+**Key property:** Swap `CFG.CHECKPOINT` + `CFG.EXPERIMENT_NAME` to re-evaluate EXP52 or EXP53 best checkpoints without code changes.
+
+**Model complexity (measured):**
+- Total params: 24.70M, Trainable: 13.30M, GFLOPs: 12.46, Inference: 4.8 ms/query
+
+### Drone → Satellite Results (EXP35 checkpoint)
+
+| Weather | R@1 | R@5 | R@10 | mAP | ΔR@1 | ΔmAP |
+|---|---|---|---|---|---|---|
+| normal | 95.94% | 99.69% | 100.00% | 97.64% | — | — |
+| fog | 86.88% | 99.38% | 100.00% | 92.68% | -9.06% | -4.96% |
+| rain | 43.75% | 71.25% | 82.81% | 56.99% | -52.19% | -40.65% |
+| snow | 40.62% | 71.25% | 80.00% | 54.48% | -55.31% | -43.16% |
+| dark | 66.88% | 87.81% | 92.50% | 76.74% | -29.06% | -20.90% |
+| light | 83.44% | 98.75% | 99.69% | 89.97% | -12.50% | -7.67% |
+| fog_rain | 42.19% | 67.50% | 79.69% | 54.92% | -53.75% | -42.72% |
+| fog_snow | 22.19% | 50.00% | 61.25% | 35.01% | -73.75% | -62.63% |
+| rain_snow | 34.69% | 58.44% | 72.19% | 46.85% | -61.25% | -50.79% |
+| wind | 81.25% | 98.44% | 99.06% | 88.76% | -14.69% | -8.88% |
+| **Avg(all)** | **59.78%** | **80.25%** | **86.72%** | **69.40%** | | |
+| **Avg(adverse)** | **55.76%** | **78.09%** | **85.24%** | **66.27%** | **-40.17%** | **-31.38%** |
+
+### R@1 — Weather × Altitude
+
+| Weather | 150m | 200m | 250m | 300m | Avg |
+|---|---|---|---|---|---|
+| normal | 92.50% | 95.00% | 97.50% | 98.75% | 95.94% |
+| fog | 82.50% | 86.25% | 90.00% | 88.75% | 86.88% |
+| rain | 36.25% | 46.25% | 46.25% | 46.25% | 43.75% |
+| snow | 37.50% | 40.00% | 42.50% | 42.50% | 40.62% |
+| dark | 61.25% | 68.75% | 72.50% | 65.00% | 66.88% |
+| light | 76.25% | 86.25% | 85.00% | 86.25% | 83.44% |
+| fog_rain | 40.00% | 41.25% | 42.50% | 45.00% | 42.19% |
+| fog_snow | 22.50% | 25.00% | 23.75% | 17.50% | 22.19% |
+| rain_snow | 31.25% | 31.25% | 41.25% | 35.00% | 34.69% |
+| wind | 80.00% | 78.75% | 82.50% | 83.75% | 81.25% |
+
+### Key Findings (EXP54 — EXP35 checkpoint)
+- **Results identical to EXP49:** Confirms eval protocol consistency between old (EXP49) and new (EXP54) eval scripts
+- **Baseline confirmed:** Zero-shot avg adverse R@1 = 55.76% → weather training provides +28–29% gain
+- **EXP54 eval script:** Reusable for EXP52/EXP53 checkpoints; run with `CFG.EXPERIMENT_NAME = "EXP54_ZeroShot_EXP52"` etc.
+- **Very fast:** 39.7s total eval (pure inference, no training)
+
+---
+
 ## Data Strategy Comparison
 
 | Experiment | Data Source | Samples/Epoch | Augmentation | Images/Loc/Epoch |
@@ -334,4 +385,4 @@
 
 ---
 
-*Last updated: 2026-03-16 — EXP52 results added*
+*Last updated: 2026-03-16 — EXP54 results added (EXP35 checkpoint zero-shot eval, confirms EXP49)*
