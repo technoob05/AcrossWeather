@@ -580,21 +580,16 @@ class OnlineWeatherTrainDataset(Dataset):
         self.loc_list = train_locs  # ordered list
 
         drone_dir = os.path.join(sues_root, CFG.DRONE_DIR)
-        for alt in CFG.ALTITUDES:
-            alt_dir = os.path.join(drone_dir, alt)
-            if not os.path.isdir(alt_dir):
-                continue
-            for loc_name in sorted(os.listdir(alt_dir)):
-                loc_path = os.path.join(alt_dir, loc_name)
-                if not os.path.isdir(loc_path):
+        for loc_name in train_locs:
+            loc_idx = self.loc_to_idx[loc_name]
+            for alt in CFG.ALTITUDES:
+                alt_dir = os.path.join(drone_dir, loc_name, alt)
+                if not os.path.isdir(alt_dir):
                     continue
-                if loc_name not in self.loc_to_idx:
-                    continue
-                loc_idx = self.loc_to_idx[loc_name]
-                for fname in sorted(os.listdir(loc_path)):
+                for fname in sorted(os.listdir(alt_dir)):
                     if fname.lower().endswith(('.jpg', '.jpeg', '.png')):
                         self.loc_buckets[loc_idx].append(
-                            (os.path.join(loc_path, fname), alt)
+                            (os.path.join(alt_dir, fname), alt)
                         )
 
         # drone_by_location for PKSampler compatibility
