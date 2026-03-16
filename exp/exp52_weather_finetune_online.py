@@ -563,14 +563,23 @@ class OnlineWeatherTrainDataset(Dataset):
       - Loads ORIGINAL drone images from SUES-200 (no pre-generated weathers)
       - Applies imgaug weather augmentation ONLINE in __getitem__
       - 1 random image per location per epoch (select=True behavior)
-      - Random weather condition per sample
+      - Drone pipeline IDENTICAL to WeatherPrompt:
+          weather(imgaug) → spatial(Resize+Pad+Crop+Flip via imgaug) → ToTensor+Normalize
 
     Each location bucket contains all drone images across altitudes.
     __len__ = number of locations (120), NOT total images.
     """
-    def __init__(self, sues_root, transform=None, weather_augmenters=None):
-        self.transform = transform
+    def __init__(self, sues_root, drone_transform=None, sat_transform=None, weather_augmenters=None):
+        self.drone_transform = drone_transform  # ToTensor+Normalize only (WeatherPrompt-style)
+        self.sat_transform = sat_transform
         self.weather_augmenters = weather_augmenters or []
+        # WeatherPrompt-identical spatial augment (iaa_drone_transform in train.py)
+        self.iaa_spatial = iaa.Sequential([
+            iaa.Resize({"height": CFG.IMG_SIZE, "width": CFG.IMG_SIZE}, interpolation=3),
+            iaa.Pad(px=10, pad_mode="edge", keep_size=False),
+            iaa.CropToFixedSize(width=CFG.IMG_SIZE, height=CFG.IMG_SIZE),
+            iaa.Fliplr(0.5),
+        ])
         self.sat_dir = os.path.join(sues_root, CFG.SAT_DIR)
 
         # Build per-location buckets: {loc_idx: [(drone_path, alt), ...]}
@@ -630,19 +639,23 @@ class OnlineWeatherTrainDataset(Dataset):
             sz = CFG.IMG_SIZE
             sat_img = Image.new('RGB', (sz, sz), (128, 128, 128))
 
-        # Apply random weather augmentation to drone image (WeatherPrompt-style)
+        # Drone pipeline — IDENTICAL to WeatherPrompt:
+        #   1. weather augmentation (imgaug)
+        #   2. spatial augmentation: Resize→Pad→CropToFixed→Fliplr (imgaug)
+        #   3. ToTensor + Normalize (torchvision)
+        drone_np = np.array(drone_img)
         if self.weather_augmenters:
             w_idx = random.randint(0, len(self.weather_augmenters) - 1)
             augmenter = self.weather_augmenters[w_idx]
             if augmenter is not None:
-                drone_np = np.array(drone_img)
                 drone_np = augmenter(image=drone_np)
-                drone_img = Image.fromarray(drone_np)
+        drone_np = self.iaa_spatial(image=drone_np)
+        drone_img = Image.fromarray(drone_np)
 
-        # Apply torchvision transforms
-        if self.transform:
-            drone_img = self.transform(drone_img)
-            sat_img = self.transform(sat_img)
+        if self.drone_transform:
+            drone_img = self.drone_transform(drone_img)
+        if self.sat_transform:
+            sat_img = self.sat_transform(sat_img)
 
         alt_idx = CFG.ALT_TO_IDX.get(alt, 0)
         alt_norm = (int(alt) - 150) / 150.0
@@ -1226,8 +1239,15 @@ def main():
 
     # ---- 2. Build Online Weather Training Dataset ----
     print("\n[3/5] Building online weather training dataset …")
-    train_tf = get_transforms("train")
     test_tf = get_transforms("test")
+
+    # WeatherPrompt-identical drone transform: spatial done by imgaug, only ToTensor+Normalize here
+    drone_tf = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ])
+    # Satellite uses full train-time augmentation
+    sat_tf = get_transforms("train")
 
     # Build imgaug weather augmenters (exact WeatherPrompt parameters)
     weather_augmenters = build_weather_augmenters()
@@ -1235,7 +1255,8 @@ def main():
 
     weather_train_ds = OnlineWeatherTrainDataset(
         CFG.SUES_ROOT,
-        transform=train_tf,
+        drone_transform=drone_tf,
+        sat_transform=sat_tf,
         weather_augmenters=weather_augmenters,
     )
     if len(weather_train_ds) == 0:
