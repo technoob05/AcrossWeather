@@ -1,7 +1,7 @@
 
 =================================================================
   EXP35: SPDGeo-DPEA-MAR — Full Merge
-  EXP27 (FiLM+AltConsist+TTE) + EXP34 (MAR+AltPred+Diversity)
+  EXP27 (FiLM+AltConsist+TTE) + EXP34 (MAR+AltPred+Div    ersity)
   Dataset: SUES-200 | Epochs: 120 | Device: cuda
   Parts: 8 | Img: 336 | Embed: 512
   Losses: 12 total | NUM_CLASSES: 120

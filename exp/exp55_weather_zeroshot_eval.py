@@ -1,22 +1,26 @@
 # =============================================================================
-# EXP54: Zero-Shot Weather Robustness Evaluation
+# EXP55: Zero-Shot Weather Robustness Evaluation  (New GeoPartLoss Pipeline)
 # =============================================================================
 # Copy to Kaggle notebook → Run All → Done
 #
 # Pure inference — NO training.
-# Loads any SPDGeo-DPEA-MAR checkpoint and evaluates on all 10 weather
-# conditions using pre-generated test images (same protocol as EXP49-53).
+# Loads the NEW best checkpoint (geopartloss_best.pth, 98.4% R@1 no-weather)
+# built with the FULL GeoPartLoss pipeline (IMG_SIZE=448, 4-group adaptive loss)
+# and evaluates on all 10 weather conditions.
 #
 # Designed for:
-#   1. EXP35 checkpoint (baseline / "our model, no weather training")
-#   2. EXP52 best checkpoint (finetune + online aug)
-#   3. EXP53 best checkpoint (scratch + online aug)
-#   → Change CFG.CHECKPOINT and CFG.EXPERIMENT_NAME accordingly
+#   1. New best checkpoint (GeoPartLoss, EXP≥35 series, IMG=448, UNF=6)
+#      → "EXP55_ZeroShot_NewBest"   ← DEFAULT
+#   2. EXP56 best checkpoint (finetune + online aug, GeoPartLoss backbone)
+#      → Uncomment EXP56 block in Config
+#   3. EXP57 best checkpoint (scratch + online aug, GeoPartLoss backbone)
+#      → Uncomment EXP57 block in Config
 #
 # Kaggle Data Sources:
 #   1. SUES-200 original:  satellite gallery + clean drone test
 #   2. Weather synthetic:  weather-augmented drone TEST images (for eval)
-#   3. Model checkpoint:   any SPDGeo-DPEA-MAR .pth file
+#   3. Model checkpoint:   new geopartloss_best.pth
+#      Path: /kaggle/input/models/minh2duy/exp35-spdgeo-dpea-m-unfreeze-blocks-4-6/pytorch/default/2/geopartloss_best.pth
 # =============================================================================
 
 import subprocess, sys
@@ -42,17 +46,17 @@ from tqdm import tqdm
 # =============================================================================
 class Config:
     # --- Which checkpoint to evaluate ---
-    # Switch between EXP35, EXP52, EXP53 best by changing these two fields
-    EXPERIMENT_NAME = "EXP54_ZeroShot_EXP35"
-    CHECKPOINT      = "/kaggle/input/models/minh2duy/exp35-spdgeo-dpea-m-unfreeze-blocks-4-6/pytorch/default/1/exp35_dpea_ga_best.pth"
+    # NEW best checkpoint (GeoPartLoss pipeline, 98.4% no-weather R@1)
+    EXPERIMENT_NAME = "EXP55_ZeroShot_NewBest"
+    CHECKPOINT      = "/kaggle/input/models/minh2duy/exp35-spdgeo-dpea-m-unfreeze-blocks-4-6/pytorch/default/2/geopartloss_best.pth"
 
-    # For EXP52 best:
-    # EXPERIMENT_NAME = "EXP54_ZeroShot_EXP52"
-    # CHECKPOINT      = "/kaggle/working/exp52_weather_finetune_online_best.pth"
+    # For EXP56 best (finetune from new best):
+    # EXPERIMENT_NAME = "EXP55_ZeroShot_EXP56"
+    # CHECKPOINT      = "/kaggle/working/exp56_weather_finetune_online_best.pth"
 
-    # For EXP53 best:
-    # EXPERIMENT_NAME = "EXP54_ZeroShot_EXP53"
-    # CHECKPOINT      = "/kaggle/working/exp53_weather_scratch_online_best.pth"
+    # For EXP57 best (scratch with new pipeline):
+    # EXPERIMENT_NAME = "EXP55_ZeroShot_EXP57"
+    # CHECKPOINT      = "/kaggle/working/exp57_weather_scratch_online_best.pth"
 
     # --- Paths ---
     SUES_ROOT       = "/kaggle/input/datasets/chinguyeen/sues-dataset/SUES-200"
@@ -68,8 +72,8 @@ class Config:
     TEST_LOCS       = list(range(121, 201))   # 80 test locations
     NUM_CLASSES     = 120
 
-    # --- Model architecture (must match checkpoint) ---
-    IMG_SIZE        = 336
+    # --- Model architecture (MUST match the new GeoPartLoss checkpoint) ---
+    IMG_SIZE        = 448   # NEW: 448 (was 336 in EXP52/53/54)
     N_PARTS         = 8
     PART_DIM        = 256
     EMBED_DIM       = 512
@@ -94,10 +98,10 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 # =============================================================================
-# MODEL DEFINITION (identical to EXP35 / EXP52 / EXP53)
+# MODEL DEFINITION  (identical to New_Best_No_Weather98.4.py / GeoPartLoss)
 # =============================================================================
 class DINOv2Backbone(nn.Module):
-    def __init__(self, unfreeze_blocks=4):
+    def __init__(self, unfreeze_blocks=6):
         super().__init__()
         self.model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', pretrained=True)
         self.feature_dim = 384; self.patch_size = 14
@@ -224,13 +228,22 @@ class MaskedPartReconstruction(nn.Module):
         self.mask_token = nn.Parameter(torch.randn(1, 1, part_dim) * 0.02)
 
     def forward(self, projected_patches, part_features, assignment):
-        B, K, D = part_features.shape
-        n_mask = max(1, int(K * self.mask_ratio))
-        mask_idx = torch.randperm(K, device=part_features.device)[:n_mask]
-        masked = part_features.clone()
-        masked[:, mask_idx] = self.mask_token.expand(B, n_mask, -1)
-        reconstructed = self.decoder(masked)
-        return F.mse_loss(reconstructed[:, mask_idx], part_features[:, mask_idx].detach())
+        B, N, D = projected_patches.shape
+        num_mask = int(N * self.mask_ratio)
+        noise = torch.rand(B, N, device=projected_patches.device)
+        ids_shuffle = noise.argsort(dim=1)
+        mask_indices = ids_shuffle[:, :num_mask]
+        target = projected_patches.detach()
+        mask_expand = mask_indices.unsqueeze(-1).expand(-1, -1, D)
+        masked_targets = torch.gather(target, 1, mask_expand)
+        K = part_features.shape[1]
+        mask_expand_k = mask_indices.unsqueeze(-1).expand(-1, -1, K)
+        masked_assign = torch.gather(assignment, 1, mask_expand_k)
+        recon = torch.bmm(masked_assign, part_features)
+        recon = self.decoder(recon)
+        recon_norm = F.normalize(recon, dim=-1)
+        target_norm = F.normalize(masked_targets, dim=-1)
+        return (1 - (recon_norm * target_norm).sum(dim=-1)).mean()
 
 
 class AltitudePredictionHead(nn.Module):
@@ -243,7 +256,7 @@ class AltitudePredictionHead(nn.Module):
 
     def forward(self, embedding, alt_target):
         pred = self.head(embedding).squeeze(-1)
-        return F.mse_loss(pred, alt_target)
+        return F.smooth_l1_loss(pred, alt_target)
 
 
 class SPDGeoDPEAMARModel(nn.Module):
@@ -267,7 +280,7 @@ class SPDGeoDPEAMARModel(nn.Module):
         self.alt_pred   = AltitudePredictionHead(cfg.EMBED_DIM)
 
         total = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        print(f"  SPDGeo-DPEA-MAR: {total/1e6:.1f}M trainable parameters")
+        print(f"  SPDGeo-DPEA-MAR (GeoPartLoss): {total/1e6:.1f}M trainable parameters")
 
     def extract_embedding(self, x, alt_idx=None):
         patches, cls_tok, hw = self.backbone(x)
@@ -433,152 +446,6 @@ def evaluate_retrieval(model, query_ds, sat_feats, sat_labels, device):
     return overall, per_alt
 
 
-# =============================================================================
-# SATELLITE→DRONE EVALUATION (S2D)
-# =============================================================================
-def build_drone_gallery_s2d(model, weather_name, device, transform):
-    """
-    Builds drone gallery for Satellite→Drone (S2D) retrieval.
-    Gallery = weather-augmented test drones (labeled 0..79) +
-              clean train drones as distractors (labeled -1000...).
-    Uses CFG.WEATHER_ROOT / CFG.SUES_ROOT directly.
-    """
-    test_locs  = [f"{l:04d}" for l in CFG.TEST_LOCS]
-    loc_to_idx = {l: i for i, l in enumerate(test_locs)}
-    train_locs = [f"{l:04d}" for l in range(1, CFG.NUM_CLASSES + 1)]
-
-    drone_imgs, drone_lbls, drone_alt_idxs = [], [], []
-    distractor_cnt = 0
-
-    # 1. Weather-augmented TEST drone images (labeled)
-    weather_test_dir = os.path.join(CFG.WEATHER_ROOT, "sues200_weather_test")
-    if os.path.isdir(weather_test_dir):
-        for class_dir_name in sorted(os.listdir(weather_test_dir)):
-            class_path = os.path.join(weather_test_dir, class_dir_name)
-            if not os.path.isdir(class_path):
-                continue
-            parts_split = class_dir_name.split("_")
-            if len(parts_split) != 2:
-                continue
-            loc_id, alt = parts_split[0], parts_split[1]
-            if loc_id not in loc_to_idx:
-                continue
-            label_idx = loc_to_idx[loc_id]
-            for fname in sorted(os.listdir(class_path)):
-                if not fname.lower().endswith(('.jpg', '.jpeg', '.png')):
-                    continue
-                stem = os.path.splitext(fname)[0]
-                if '-' not in stem:
-                    continue
-                w = stem.rsplit('-', 1)[-1]
-                if w != weather_name:
-                    continue
-                try:
-                    img = transform(Image.open(os.path.join(class_path, fname)).convert('RGB'))
-                    drone_imgs.append(img)
-                    drone_lbls.append(label_idx)
-                    drone_alt_idxs.append(CFG.ALT_TO_IDX.get(alt, 0))
-                except Exception:
-                    pass
-
-    # 2. Clean TRAIN drone images (distractors)
-    drone_dir = os.path.join(CFG.SUES_ROOT, CFG.DRONE_DIR)
-    for loc in train_locs:
-        for alt in CFG.ALTITUDES:
-            alt_dir = os.path.join(drone_dir, loc, alt)
-            if not os.path.isdir(alt_dir):
-                continue
-            imgs_in_dir = sorted(f for f in os.listdir(alt_dir)
-                                 if f.lower().endswith(('.jpg', '.jpeg', '.png')))
-            if not imgs_in_dir:
-                continue
-            try:
-                img = transform(Image.open(os.path.join(alt_dir, imgs_in_dir[0])).convert('RGB'))
-                drone_imgs.append(img)
-                drone_lbls.append(-1000 - distractor_cnt)
-                drone_alt_idxs.append(CFG.ALT_TO_IDX.get(alt, 0))
-                distractor_cnt += 1
-            except Exception:
-                pass
-
-    # Embed all drone images
-    drone_feats = []
-    model.eval()
-    with torch.no_grad():
-        for i in range(0, len(drone_imgs), CFG.BATCH_SIZE):
-            bimgs = torch.stack(drone_imgs[i:i + CFG.BATCH_SIZE]).to(device)
-            balts = torch.tensor(drone_alt_idxs[i:i + CFG.BATCH_SIZE], device=device)
-            with torch.amp.autocast('cuda', enabled=CFG.USE_AMP):
-                feats = model.extract_embedding(bimgs, alt_idx=balts)
-            drone_feats.append(feats.cpu())
-
-    drone_feats = torch.cat(drone_feats)
-    drone_lbls  = torch.tensor(drone_lbls)
-    test_cnt    = len(drone_feats) - distractor_cnt
-    print(f"  Drone gallery S2D ({weather_name}): {len(drone_feats)} "
-          f"(test={test_cnt}, distractors={distractor_cnt})")
-    return drone_feats, drone_lbls
-
-
-@torch.no_grad()
-def evaluate_s2d(sat_feats, sat_labels, drone_feats, drone_labels):
-    """
-    Satellite→Drone retrieval.
-    Queries  = test satellite images (sat_labels >= 0, 80 queries).
-    Gallery  = weather-augmented test drones + clean distractor train drones.
-    Each query has up to 4 matches (one per altitude of same location).
-    """
-    q_mask   = sat_labels >= 0
-    q_feats  = sat_feats[q_mask]
-    q_labels = sat_labels[q_mask]
-    sim = q_feats @ drone_feats.T
-    _, rank = sim.sort(1, descending=True)
-    N = q_feats.size(0)
-    r1 = r5 = r10 = ap = 0
-    for i in range(N):
-        matches = torch.where(drone_labels[rank[i]] == q_labels[i])[0]
-        if len(matches) == 0:
-            continue
-        first = matches[0].item()
-        if first < 1:  r1 += 1
-        if first < 5:  r5 += 1
-        if first < 10: r10 += 1
-        ap += sum((j + 1) / (p.item() + 1) for j, p in enumerate(matches)) / len(matches)
-    return {
-        'R@1': r1 / N * 100, 'R@5': r5 / N * 100,
-        'R@10': r10 / N * 100, 'mAP': ap / N * 100,
-        'num_queries': N,
-    }
-
-
-def print_s2d_weather_table(all_s2d_results, normal_s2d):
-    """Print Satellite→Drone per-weather results table."""
-    print(f"\n{'='*85}")
-    print(f"  WEATHER ROBUSTNESS — Satellite→Drone Retrieval (SUES-200 Test)")
-    print(f"{'='*85}")
-    print(f"  {'Weather':>12s}  {'R@1':>7s}  {'R@5':>7s}  {'R@10':>7s}  {'mAP':>7s}  {'\u0394R@1':>7s}  {'\u0394mAP':>7s}  {'#Q':>5s}")
-    print(f"  {'-'*78}")
-    nr1 = normal_s2d['R@1']; nmap = normal_s2d['mAP']
-    for w_name in CFG.WEATHER_NAMES:
-        r = all_s2d_results[w_name]
-        dr1 = r['R@1'] - nr1; dmap = r['mAP'] - nmap
-        print(f"  {w_name:>12s}  {r['R@1']:6.2f}%  {r['R@5']:6.2f}%  {r['R@10']:6.2f}%  "
-              f"{r['mAP']:6.2f}%  {dr1:+6.2f}%  {dmap:+6.2f}%  "
-              f"{r['num_queries']:>5d}")
-    print(f"  {'-'*78}")
-    adv = [w for w in CFG.WEATHER_NAMES if w != 'normal']
-    avg_r1  = np.mean([all_s2d_results[w]['R@1']  for w in CFG.WEATHER_NAMES])
-    avg_r5  = np.mean([all_s2d_results[w]['R@5']  for w in CFG.WEATHER_NAMES])
-    avg_r10 = np.mean([all_s2d_results[w]['R@10'] for w in CFG.WEATHER_NAMES])
-    avg_map = np.mean([all_s2d_results[w]['mAP']  for w in CFG.WEATHER_NAMES])
-    avg_adv_r1  = np.mean([all_s2d_results[w]['R@1']  for w in adv])
-    avg_adv_map = np.mean([all_s2d_results[w]['mAP']  for w in adv])
-    print(f"  {'Avg(all)':>12s}  {avg_r1:6.2f}%  {avg_r5:6.2f}%  {avg_r10:6.2f}%  {avg_map:6.2f}%")
-    print(f"  {'Avg(adverse)':>12s}  {avg_adv_r1:6.2f}%  {'':>7s}  {'':>7s}  {avg_adv_map:6.2f}%  "
-          f"{avg_adv_r1-nr1:+5.2f}%  {avg_adv_map-nmap:+5.2f}%")
-    print(f"{'='*85}")
-
-
 def measure_model_complexity(model, device):
     sz = CFG.IMG_SIZE
     total_params = sum(p.numel() for p in model.parameters())
@@ -612,11 +479,8 @@ def measure_model_complexity(model, device):
     }
 
 
-# =============================================================================
-# PRINT / TABLE FUNCTIONS
-# =============================================================================
 def print_complexity(stats):
-    print(f"\n  ┌─ Model Complexity ─────────────────────────────┐")
+    print(f"\n  ┌─ Model Complexity (IMG={stats['img_size']}) ─────────────────┐")
     print(f"  │  Total params:     {stats['total_params_M']:>8.2f}M                │")
     print(f"  │  Trainable params: {stats['trainable_params_M']:>8.2f}M                │")
     if stats['gflops'] is not None:
@@ -624,13 +488,12 @@ def print_complexity(stats):
     else:
         print(f"  │  GFLOPs:           N/A (pip install thop)    │")
     print(f"  │  Inference:        {stats['ms_per_query']:>8.1f} ms/query         │")
-    print(f"  │  Image size:       {stats['img_size']:>4d}×{stats['img_size']:<4d}               │")
     print(f"  └─────────────────────────────────────────────────┘")
 
 
 def print_weather_table(all_results, normal_results):
     print(f"\n{'='*85}")
-    print(f"  WEATHER ROBUSTNESS — Drone→Satellite Retrieval (SUES-200 Test)")
+    print(f"  WEATHER ROBUSTNESS — Drone→Satellite Retrieval (SUES-200 Test, IMG={CFG.IMG_SIZE})")
     print(f"{'='*85}")
     print(f"  {'Weather':>12s}  {'R@1':>7s}  {'R@5':>7s}  {'R@10':>7s}  {'mAP':>7s}  {'ΔR@1':>7s}  {'ΔmAP':>7s}  {'#Q':>5s}")
     print(f"  {'-'*78}")
@@ -678,9 +541,9 @@ def print_cross_table(all_results):
 
 
 # =============================================================================
-# KNOWN RESULTS FROM PREVIOUS EXPERIMENTS
+# KNOWN RESULTS FROM PREVIOUS EXPERIMENTS (for comparison table)
 # =============================================================================
-EXP49_RESULTS = {   # zero-shot (EXP35 checkpoint, old eval script)
+EXP49_RESULTS = {   # zero-shot (EXP35 checkpoint, old eval)
     'normal':    {'R@1': 95.94, 'mAP': 97.64},
     'fog':       {'R@1': 86.88, 'mAP': 92.68},
     'rain':      {'R@1': 43.75, 'mAP': 56.99},
@@ -692,44 +555,7 @@ EXP49_RESULTS = {   # zero-shot (EXP35 checkpoint, old eval script)
     'rain_snow': {'R@1': 34.69, 'mAP': 46.85},
     'wind':      {'R@1': 81.25, 'mAP': 88.76},
 }
-EXP50_RESULTS = {   # finetune + pre-generated weather
-    'normal':    {'R@1': 94.38, 'mAP': 96.78},
-    'fog':       {'R@1': 90.94, 'mAP': 95.00},
-    'rain':      {'R@1': 85.31, 'mAP': 91.07},
-    'snow':      {'R@1': 88.12, 'mAP': 92.86},
-    'dark':      {'R@1': 80.00, 'mAP': 86.58},
-    'light':     {'R@1': 86.25, 'mAP': 91.42},
-    'fog_rain':  {'R@1': 78.12, 'mAP': 86.61},
-    'fog_snow':  {'R@1': 73.44, 'mAP': 82.36},
-    'rain_snow': {'R@1': 84.69, 'mAP': 90.36},
-    'wind':      {'R@1': 85.62, 'mAP': 90.78},
-}
-EXP51_RESULTS = {   # scratch + pre-generated weather
-    'normal':    {'R@1': 90.94, 'mAP': 95.18},
-    'fog':       {'R@1': 89.69, 'mAP': 94.37},
-    'rain':      {'R@1': 86.56, 'mAP': 92.09},
-    'snow':      {'R@1': 89.69, 'mAP': 93.66},
-    'dark':      {'R@1': 80.31, 'mAP': 87.74},
-    'light':     {'R@1': 86.88, 'mAP': 91.98},
-    'fog_rain':  {'R@1': 81.25, 'mAP': 88.60},
-    'fog_snow':  {'R@1': 75.00, 'mAP': 84.63},
-    'rain_snow': {'R@1': 86.25, 'mAP': 91.27},
-    'wind':      {'R@1': 88.12, 'mAP': 92.98},
-}
-# Fill these in after EXP52/53 complete (set to None to skip in comparison)
-EXP52_RESULTS = {   # finetune + online aug (WeatherPrompt-style)
-    'normal':    {'R@1': 95.00, 'mAP': 96.71},
-    'fog':       {'R@1': 90.00, 'mAP': 94.30},
-    'rain':      {'R@1': 89.69, 'mAP': 93.05},
-    'snow':      {'R@1': 87.50, 'mAP': 92.05},
-    'dark':      {'R@1': 78.75, 'mAP': 85.07},
-    'light':     {'R@1': 84.69, 'mAP': 90.14},
-    'fog_rain':  {'R@1': 81.88, 'mAP': 88.64},
-    'fog_snow':  {'R@1': 69.38, 'mAP': 79.21},
-    'rain_snow': {'R@1': 84.69, 'mAP': 90.06},
-    'wind':      {'R@1': 88.75, 'mAP': 92.93},
-}
-EXP53_RESULTS = {   # scratch  + online aug (WeatherPrompt-style)
+EXP53_RESULTS = {   # scratch + online aug (previous best weather model)
     'normal':    {'R@1': 92.81, 'mAP': 95.81},
     'fog':       {'R@1': 91.88, 'mAP': 94.94},
     'rain':      {'R@1': 90.31, 'mAP': 94.18},
@@ -744,97 +570,49 @@ EXP53_RESULTS = {   # scratch  + online aug (WeatherPrompt-style)
 
 
 def print_comparison(all_results):
-    """Compare EXP54 against all known prior experiments."""
-    # Build list of experiments that have real data
+    """Compare EXP55 (new best) against EXP49 (old zero-shot) and EXP53 (best weather model)."""
     exps = [
-        ("EXP49", EXP49_RESULTS, "zero-shot"),
-        ("EXP50", EXP50_RESULTS, "ft-pregen"),
-        ("EXP51", EXP51_RESULTS, "scratch-pregen"),
+        ("EXP49", EXP49_RESULTS, "zero-shot-old"),
+        ("EXP53", EXP53_RESULTS, "scratch-online"),
     ]
-    if EXP52_RESULTS is not None:
-        exps.append(("EXP52", EXP52_RESULTS, "ft-online"))
-    if EXP53_RESULTS is not None:
-        exps.append(("EXP53", EXP53_RESULTS, "scratch-online"))
+    exp_name_short = CFG.EXPERIMENT_NAME
 
-    exp_name_short = CFG.EXPERIMENT_NAME.split("_")[-1]   # e.g. "EXP35"
-    col_width = max(8, len(exp_name_short) + 2)
+    print(f"\n{'='*110}")
+    print(f"  COMPARISON R@1(%): EXP49(zero-shot-old) vs EXP53(scratch-online,best) vs {exp_name_short}")
+    print(f"{'='*110}")
 
-    header  = f"\n{'='*120}\n"
-    header += f"  COMPARISON (R@1%): "
-    header += " vs ".join(f"{e[0]}({e[2]})" for e in exps)
-    header += f" vs {CFG.EXPERIMENT_NAME}\n"
-    header += f"{'='*120}"
-    print(header)
-
-    # Column headers
     row = f"  {'Weather':>12s}"
     for exp_id, _, _ in exps:
-        row += f"  {exp_id:>8s}"
-    row += f"  {exp_name_short:>8s}"
+        row += f"  {exp_id:>10s}"
+    row += f"  {'EXP55':>10s}  {'Δ vs EXP53':>10s}"
     print(row)
     print(f"  {'-'*80}")
 
     for w in CFG.WEATHER_NAMES:
         row = f"  {w:>12s}"
         for _, res, _ in exps:
-            row += f"  {res[w]['R@1']:7.2f}%"
-        e54_r1 = all_results[w]['overall']['R@1']
-        row += f"  {e54_r1:7.2f}%"
+            row += f"  {res[w]['R@1']:9.2f}%"
+        e55_r1 = all_results[w]['overall']['R@1']
+        delta = e55_r1 - EXP53_RESULTS[w]['R@1']
+        row += f"  {e55_r1:9.2f}%  {delta:+9.2f}%"
         print(row)
 
     print(f"  {'-'*80}")
     adv = [w for w in CFG.WEATHER_NAMES if w != 'normal']
     row = f"  {'Avg(adverse)':>12s}"
     for _, res, _ in exps:
-        row += f"  {np.mean([res[w]['R@1'] for w in adv]):7.2f}%"
-    row += f"  {np.mean([all_results[w]['overall']['R@1'] for w in adv]):7.2f}%"
+        row += f"  {np.mean([res[w]['R@1'] for w in adv]):9.2f}%"
+    e55_adv = np.mean([all_results[w]['overall']['R@1'] for w in adv])
+    row += f"  {e55_adv:9.2f}%  {e55_adv-np.mean([EXP53_RESULTS[w]['R@1'] for w in adv]):+9.2f}%"
     print(row)
 
     row = f"  {'Avg(all)':>12s}"
     for _, res, _ in exps:
-        row += f"  {np.mean([res[w]['R@1'] for w in CFG.WEATHER_NAMES]):7.2f}%"
-    row += f"  {np.mean([all_results[w]['overall']['R@1'] for w in CFG.WEATHER_NAMES]):7.2f}%"
+        row += f"  {np.mean([res[w]['R@1'] for w in CFG.WEATHER_NAMES]):9.2f}%"
+    e55_all = np.mean([all_results[w]['overall']['R@1'] for w in CFG.WEATHER_NAMES])
+    row += f"  {e55_all:9.2f}%  {e55_all-np.mean([EXP53_RESULTS[w]['R@1'] for w in CFG.WEATHER_NAMES]):+9.2f}%"
     print(row)
-    print(f"{'='*120}")
-
-
-def generate_latex_table(all_results, normal_results):
-    nr1 = normal_results['R@1']; nmap = normal_results['mAP']
-    lines = [
-        r"\begin{table}[t]",
-        r"\centering",
-        rf"\caption{{Zero-shot weather robustness evaluation ({CFG.EXPERIMENT_NAME}).}}",
-        rf"\label{{tab:{CFG.EXPERIMENT_NAME.lower()}}}",
-        r"\resizebox{\columnwidth}{!}{%",
-        r"\begin{tabular}{l|cccc|cc}",
-        r"\toprule",
-        r"Weather & R@1 & R@5 & R@10 & mAP & $\Delta$R@1 & $\Delta$mAP \\",
-        r"\midrule",
-    ]
-    for w in CFG.WEATHER_NAMES:
-        r = all_results[w]['overall']
-        dr1 = r['R@1'] - nr1; dmap = r['mAP'] - nmap
-        label = w.replace('_', r'\_')
-        if w == 'normal':
-            lines.append(f"{label} & {r['R@1']:.2f} & {r['R@5']:.2f} & {r['R@10']:.2f} & "
-                         f"{r['mAP']:.2f} & --- & --- \\\\")
-        else:
-            lines.append(f"{label} & {r['R@1']:.2f} & {r['R@5']:.2f} & {r['R@10']:.2f} & "
-                         f"{r['mAP']:.2f} & {dr1:+.2f} & {dmap:+.2f} \\\\")
-    adv = [w for w in CFG.WEATHER_NAMES if w != 'normal']
-    avg_r1  = np.mean([all_results[w]['overall']['R@1']  for w in adv])
-    avg_r5  = np.mean([all_results[w]['overall']['R@5']  for w in adv])
-    avg_r10 = np.mean([all_results[w]['overall']['R@10'] for w in adv])
-    avg_map = np.mean([all_results[w]['overall']['mAP']  for w in adv])
-    lines += [
-        r"\midrule",
-        f"Avg(adverse) & {avg_r1:.2f} & {avg_r5:.2f} & {avg_r10:.2f} & "
-        f"{avg_map:.2f} & {avg_r1-nr1:+.2f} & {avg_map-nmap:+.2f} \\\\",
-        r"\bottomrule",
-        r"\end{tabular}}",
-        r"\end{table}",
-    ]
-    return '\n'.join(lines)
+    print(f"{'='*110}")
 
 
 # =============================================================================
@@ -844,170 +622,107 @@ def main():
     import random
     random.seed(CFG.SEED); np.random.seed(CFG.SEED)
     torch.manual_seed(CFG.SEED); torch.cuda.manual_seed_all(CFG.SEED)
-    torch.backends.cudnn.benchmark = True
-
     os.makedirs(CFG.OUTPUT_DIR, exist_ok=True)
-    start_time = datetime.datetime.now()
 
     print("=" * 75)
-    print(f"  {CFG.EXPERIMENT_NAME}")
-    print(f"  Zero-Shot Weather Robustness Evaluation (no training)")
+    print(f"  EXP55: Zero-Shot Weather Eval — GeoPartLoss Pipeline")
+    print(f"  Experiment: {CFG.EXPERIMENT_NAME}")
     print(f"  Checkpoint: {CFG.CHECKPOINT}")
-    print(f"  SUES-200:   {CFG.SUES_ROOT}")
-    print(f"  Device:     {DEVICE}")
+    print(f"  IMG_SIZE: {CFG.IMG_SIZE}  |  Device: {DEVICE}")
     print("=" * 75)
 
-    # ---- 1. Load Model ----
-    print("\n[1/3] Loading model …")
-    if not os.path.exists(CFG.CHECKPOINT):
-        print(f"  ERROR: Checkpoint not found at {CFG.CHECKPOINT}")
-        return
+    # --- Build Model ---
+    print("\nBuilding model…")
+    model = SPDGeoDPEAMARModel(CFG.NUM_CLASSES, CFG).to(DEVICE)
 
-    model = SPDGeoDPEAMARModel(CFG.NUM_CLASSES).to(DEVICE)
+    # --- Load Checkpoint ---
+    print(f"\nLoading checkpoint: {CFG.CHECKPOINT}")
     ckpt = torch.load(CFG.CHECKPOINT, map_location=DEVICE, weights_only=False)
-    state_dict = ckpt.get('model_state_dict', ckpt)
-    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    state = ckpt.get('model_state_dict', ckpt)
+    missing, unexpected = model.load_state_dict(state, strict=False)
     if missing:
-        print(f"  [WARN] Missing keys  ({len(missing)}): {missing[:5]} …")
+        print(f"  [WARN] Missing keys ({len(missing)}): {missing[:5]}...")
     if unexpected:
-        print(f"  [WARN] Unexpected keys ({len(unexpected)}): {unexpected[:5]} …")
-
-    ckpt_epoch = ckpt.get('epoch', '?')
-    ckpt_r1    = ckpt.get('metrics', {}).get('R@1', ckpt.get('best_r1', '?'))
-    print(f"  Loaded  epoch={ckpt_epoch}  pretrained R@1={ckpt_r1}")
-
+        print(f"  [WARN] Unexpected keys ({len(unexpected)}): {unexpected[:5]}...")
     model.eval()
 
+    ckpt_epoch = ckpt.get('epoch', '?')
+    ckpt_r1    = ckpt.get('metrics', {}).get('R@1', '?')
+    print(f"  Loaded epoch={ckpt_epoch}, reported R@1={ckpt_r1}")
+
+    # --- Model Complexity ---
     complexity = measure_model_complexity(model, DEVICE)
     print_complexity(complexity)
 
-    # ---- 2. Build Satellite Gallery ----
-    print("\n[2/3] Building satellite gallery …")
-    tf = get_test_transform()
-    sat_feats, sat_labels = build_satellite_gallery(model, DEVICE, tf)
+    # --- Transforms ---
+    transform = get_test_transform()
 
-    # ---- 3. Evaluate All Weather Conditions ----
-    print("\n[3/3] Evaluating all 10 weather conditions …")
-    all_results = OrderedDict()
+    # --- Build Satellite Gallery ---
+    print("\nBuilding satellite gallery…")
+    sat_feats, sat_labels = build_satellite_gallery(model, DEVICE, transform)
+
+    # --- Evaluate all weather conditions ---
+    print(f"\nEvaluating {len(CFG.WEATHER_NAMES)} weather conditions…")
+    all_results = {}
+    t_total = time.time()
+
     for w_name in CFG.WEATHER_NAMES:
-        query_ds = WeatherQueryDataset(CFG.WEATHER_ROOT, w_name, transform=tf)
+        query_ds = WeatherQueryDataset(CFG.WEATHER_ROOT, w_name, transform)
         if len(query_ds) == 0:
-            print(f"  [SKIP] {w_name}: no images found in {CFG.WEATHER_ROOT}")
+            print(f"  [{w_name}] — NO queries found, skipping")
             all_results[w_name] = {
                 'overall': {'R@1': 0, 'R@5': 0, 'R@10': 0, 'mAP': 0, 'num_queries': 0},
                 'per_alt': {}
             }
             continue
+        t0 = time.time()
         overall, per_alt = evaluate_retrieval(model, query_ds, sat_feats, sat_labels, DEVICE)
+        elapsed = time.time() - t0
         all_results[w_name] = {'overall': overall, 'per_alt': per_alt}
-        print(f"  {w_name:>12s}  R@1={overall['R@1']:.2f}%  R@5={overall['R@5']:.2f}%  "
-              f"R@10={overall['R@10']:.2f}%  mAP={overall['mAP']:.2f}%  ({len(query_ds)} queries)")
+        print(f"  [{w_name:>10s}] R@1={overall['R@1']:6.2f}%  mAP={overall['mAP']:6.2f}%  "
+              f"({overall['num_queries']} queries, {elapsed:.1f}s)")
 
-    # ---- Print Tables ----
+    total_time = time.time() - t_total
+
+    # --- Print Tables ---
     normal_results = all_results['normal']['overall']
     print_weather_table(all_results, normal_results)
     print_cross_table(all_results)
     print_comparison(all_results)
 
-    # ---- S2D Evaluation (Satellite→Drone) ----
-    print(f"\n{'='*75}")
-    print(f"  [S2D] Satellite→Drone Evaluation …")
-    all_s2d_results = OrderedDict()
-    for w_name in CFG.WEATHER_NAMES:
-        drone_feats_s2d, drone_lbls_s2d = build_drone_gallery_s2d(
-            model, w_name, DEVICE, tf)
-        s2d_res = evaluate_s2d(sat_feats, sat_labels, drone_feats_s2d, drone_lbls_s2d)
-        all_s2d_results[w_name] = s2d_res
-        print(f"    {w_name:>12s}  R@1={s2d_res['R@1']:.2f}%  R@5={s2d_res['R@5']:.2f}%  "
-              f"R@10={s2d_res['R@10']:.2f}%  mAP={s2d_res['mAP']:.2f}%")
-        del drone_feats_s2d, drone_lbls_s2d
-        gc.collect()
-        if torch.cuda.is_available(): torch.cuda.empty_cache()
-    normal_s2d = all_s2d_results['normal']
-    print_s2d_weather_table(all_s2d_results, normal_s2d)
+    # --- Summary ---
+    adv = [w for w in CFG.WEATHER_NAMES if w != 'normal']
+    avg_all = np.mean([all_results[w]['overall']['R@1'] for w in CFG.WEATHER_NAMES])
+    avg_adv = np.mean([all_results[w]['overall']['R@1'] for w in adv])
+    print(f"\n  ★ EXP55 Summary — {CFG.EXPERIMENT_NAME}")
+    print(f"    Normal R@1:       {normal_results['R@1']:6.2f}%")
+    print(f"    Avg(all) R@1:     {avg_all:6.2f}%")
+    print(f"    Avg(adverse) R@1: {avg_adv:6.2f}%")
+    print(f"    Worst R@1:        {min(all_results[w]['overall']['R@1'] for w in CFG.WEATHER_NAMES):6.2f}%  "
+          f"({min(CFG.WEATHER_NAMES, key=lambda w: all_results[w]['overall']['R@1'])})")
+    print(f"    Total eval time:  {total_time:.1f}s")
 
-    # LaTeX
-    latex = generate_latex_table(all_results, normal_results)
-    print(f"\n{'='*75}\n  LaTeX Table:\n{'='*75}")
-    print(latex)
-
-    # ---- Save JSON ----
-    end_time = datetime.datetime.now()
-    adv_weathers = [w for w in CFG.WEATHER_NAMES if w != 'normal']
-    summary = {
+    # --- Save JSON ---
+    ts = datetime.datetime.now().isoformat()
+    result_data = {
         'experiment': CFG.EXPERIMENT_NAME,
         'checkpoint': CFG.CHECKPOINT,
-        'ckpt_epoch': ckpt_epoch,
-        'dataset': 'SUES-200',
-        'direction': 'drone → satellite (D2S) + satellite → drone (S2D) — zero-shot inference',
-        'timestamp': {
-            'start': start_time.isoformat(),
-            'end': end_time.isoformat(),
-            'duration_s': (end_time - start_time).total_seconds(),
-        },
+        'timestamp': ts,
+        'img_size': CFG.IMG_SIZE,
         'model_complexity': complexity,
-        'satellite_gallery_size': int(len(sat_feats)),
-        'weather_results': {
-            w: {
-                'overall': all_results[w]['overall'],
-                'per_altitude': {str(k): v for k, v in all_results[w]['per_alt'].items()},
-            }
-            for w in CFG.WEATHER_NAMES
-        },
-        'summary_metrics': {
-            'normal_R@1': normal_results['R@1'],
-            'normal_mAP': normal_results['mAP'],
-            'avg_all_R@1':     float(np.mean([all_results[w]['overall']['R@1'] for w in CFG.WEATHER_NAMES])),
-            'avg_all_mAP':     float(np.mean([all_results[w]['overall']['mAP'] for w in CFG.WEATHER_NAMES])),
-            'avg_adverse_R@1': float(np.mean([all_results[w]['overall']['R@1'] for w in adv_weathers])),
-            'avg_adverse_mAP': float(np.mean([all_results[w]['overall']['mAP'] for w in adv_weathers])),
-            'vs_exp49': {w: float(all_results[w]['overall']['R@1'] - EXP49_RESULTS[w]['R@1'])
-                         for w in CFG.WEATHER_NAMES},
-            'vs_exp50': {w: float(all_results[w]['overall']['R@1'] - EXP50_RESULTS[w]['R@1'])
-                         for w in CFG.WEATHER_NAMES},
-        },
-        'latex_table': latex,
-        's2d_weather_results': {w: all_s2d_results[w] for w in CFG.WEATHER_NAMES},
-        's2d_summary_metrics': {
-            'normal_R@1': normal_s2d['R@1'],
-            'normal_mAP': normal_s2d['mAP'],
-            'avg_all_R@1':     float(np.mean([all_s2d_results[w]['R@1'] for w in CFG.WEATHER_NAMES])),
-            'avg_all_mAP':     float(np.mean([all_s2d_results[w]['mAP'] for w in CFG.WEATHER_NAMES])),
-            'avg_adverse_R@1': float(np.mean([all_s2d_results[w]['R@1'] for w in adv_weathers])),
-            'avg_adverse_mAP': float(np.mean([all_s2d_results[w]['mAP'] for w in adv_weathers])),
-        },
+        'results': {w: all_results[w]['overall'] for w in CFG.WEATHER_NAMES},
+        'per_alt': {w: all_results[w]['per_alt'] for w in CFG.WEATHER_NAMES},
+        'summary': {
+            'normal_r1': normal_results['R@1'],
+            'avg_all_r1': avg_all,
+            'avg_adverse_r1': avg_adv,
+        }
     }
-
-    json_name = CFG.EXPERIMENT_NAME.lower() + ".json"
-    json_path = os.path.join(CFG.OUTPUT_DIR, json_name)
-    with open(json_path, 'w', encoding='utf-8') as f:
-        json.dump(summary, f, indent=2, ensure_ascii=False)
-    print(f"\n  Results saved: {json_path}")
-
-    # ---- Final Summary ----
-    sm = summary['summary_metrics']
-    print(f"\n{'='*75}")
-    print(f"  {CFG.EXPERIMENT_NAME} COMPLETE  (zero-shot, no training)")
-    print(f"{'='*75}")
-    print(f"  Checkpoint:         epoch={ckpt_epoch}")
-    print(f"  Normal:             R@1={sm['normal_R@1']:.2f}%  mAP={sm['normal_mAP']:.2f}%")
-    print(f"  Avg (all weather):  R@1={sm['avg_all_R@1']:.2f}%  mAP={sm['avg_all_mAP']:.2f}%")
-    print(f"  Avg (adverse):      R@1={sm['avg_adverse_R@1']:.2f}%  mAP={sm['avg_adverse_mAP']:.2f}%")
-    e49_adv = np.mean([EXP49_RESULTS[w]['R@1'] for w in adv_weathers])
-    print(f"\n  vs EXP49 (zero-shot, old eval)  avg adverse R@1: "
-          f"{e49_adv:.2f}% → {sm['avg_adverse_R@1']:.2f}% "
-          f"({sm['avg_adverse_R@1'] - e49_adv:+.2f}%)")
-    e50_adv = np.mean([EXP50_RESULTS[w]['R@1'] for w in adv_weathers])
-    print(f"  vs EXP50 (ft+pregen)            avg adverse R@1: "
-          f"{e50_adv:.2f}% → {sm['avg_adverse_R@1']:.2f}% "
-          f"({sm['avg_adverse_R@1'] - e50_adv:+.2f}%)")
-    print(f"  Eval duration:      {(end_time - start_time).total_seconds():.1f}s")
-    s2d_sm = summary['s2d_summary_metrics']
-    print(f"\n  S2D — Satellite→Drone:")
-    print(f"  Normal:             R@1={normal_s2d['R@1']:.2f}%  mAP={normal_s2d['mAP']:.2f}%")
-    print(f"  Avg (all weather):  R@1={s2d_sm['avg_all_R@1']:.2f}%  mAP={s2d_sm['avg_all_mAP']:.2f}%")
-    print(f"  Avg (adverse):      R@1={s2d_sm['avg_adverse_R@1']:.2f}%  mAP={s2d_sm['avg_adverse_mAP']:.2f}%")
-    print(f"{'='*75}")
+    out_path = os.path.join(CFG.OUTPUT_DIR, f"exp55_{CFG.EXPERIMENT_NAME}_results.json")
+    with open(out_path, 'w') as f:
+        json.dump(result_data, f, indent=2)
+    print(f"\n  Results saved → {out_path}")
 
 
-main()
+if __name__ == '__main__':
+    main()
