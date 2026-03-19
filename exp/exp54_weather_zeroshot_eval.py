@@ -44,7 +44,7 @@ class Config:
     # --- Which checkpoint to evaluate ---
     # Switch between EXP35, EXP52, EXP53 best by changing these two fields
     EXPERIMENT_NAME = "EXP54_ZeroShot_EXP35"
-    CHECKPOINT      = "/kaggle/input/models/minh2duy/exp35-spdgeo-dpea-m-unfreeze-blocks-4-6/pytorch/default/1/exp35_dpea_ga_best.pth"
+    CHECKPOINT      = "/kaggle/input/models/minh2duy/exp35-spdgeo-dpea-m-unfreeze-blocks-4-6/pytorch/default/2/geopartloss_best.pth"
 
     # For EXP52 best:
     # EXPERIMENT_NAME = "EXP54_ZeroShot_EXP52"

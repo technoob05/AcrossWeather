@@ -51,7 +51,7 @@ class Config:
     # --- Paths ---
     SUES_ROOT       = "/kaggle/input/datasets/chinguyeen/sues-dataset/SUES-200"
     WEATHER_ROOT    = "/kaggle/input/datasets/minh2duy/sues200-weather/weather_synthetic"
-    CHECKPOINT      = "/kaggle/input/models/minh2duy/exp35-spdgeo-dpea-m-unfreeze-blocks-4-6/pytorch/default/1/exp35_dpea_ga_best.pth"
+    CHECKPOINT      = "/kaggle/input/models/minh2duy/exp35-spdgeo-dpea-m-unfreeze-blocks-4-6/pytorch/default/2/geopartloss_best.pth"
     OUTPUT_DIR      = "/kaggle/working"
 
     # --- Dataset structure ---
